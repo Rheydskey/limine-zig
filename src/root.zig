@@ -79,24 +79,7 @@ pub const MediaType = enum(u32) {
     _,
 };
 
-const LimineFileV1 = extern struct {
-    revision: u64,
-    address: LiminePtr(*align(4096) anyopaque),
-    size: u64,
-    path: LiminePtr([*:0]u8),
-    cmdline: LiminePtr([*:0]u8),
-    media_type: MediaType,
-    unused: u32,
-    tftp_ip: u32,
-    tftp_port: u32,
-    partition_index: u32,
-    mbr_disk_id: u32,
-    gpt_disk_uuid: Uuid,
-    gpt_part_uuid: Uuid,
-    part_uuid: Uuid,
-};
-
-const LimineFileV2 = extern struct {
+pub const File = extern struct {
     revision: u64,
     address: LiminePtr(*align(4096) anyopaque),
     size: u64,
@@ -112,11 +95,6 @@ const LimineFileV2 = extern struct {
     gpt_part_uuid: Uuid,
     part_uuid: Uuid,
 };
-
-pub const File = if (config.api_revision >= 3)
-    LimineFileV2
-else
-    LimineFileV1;
 
 // Boot info
 
@@ -473,9 +451,9 @@ pub const FiveLevelPagingRequest = extern struct {
 
 // MP (formerly SMP)
 
-pub const GotoAddress = *const fn (*SmpMpInfo) callconv(.c) noreturn;
+pub const GotoAddress = *const fn (*MpInfo) callconv(.c) noreturn;
 
-const SmpMpFlags = switch (arch) {
+pub const MpFlags = switch (arch) {
     .x86_64 => packed struct(u32) {
         x2apic: bool = false,
         reserved: u31 = 0,
@@ -485,7 +463,7 @@ const SmpMpFlags = switch (arch) {
     },
 };
 
-const SmpMpInfo = switch (arch) {
+pub const MpInfo = switch (arch) {
     .x86_64 => extern struct {
         processor_id: u32,
         lapic_id: u32,
@@ -512,18 +490,18 @@ const SmpMpInfo = switch (arch) {
     },
 };
 
-const SmpMpResponse = switch (arch) {
+pub const MpResponse = switch (arch) {
     .x86_64 => extern struct {
         revision: u64,
-        flags: SmpMpFlags,
+        flags: MpFlags,
         bsp_lapic_id: u32,
         cpu_count: u64,
-        cpus: LiminePtr(?[*]*SmpMpInfo),
+        cpus: LiminePtr(?[*]*MpInfo),
 
         /// Helper function to retrieve a slice of the CPUs array.
         /// This function will return null if the CPU count is 0 or if
         /// the CPUs pointer is null.
-        pub fn getCpus(self: @This()) []*SmpMpInfo {
+        pub fn getCpus(self: @This()) []*MpInfo {
             if (self.cpu_count == 0 or self.cpus == null) {
                 return &.{};
             }
@@ -532,15 +510,15 @@ const SmpMpResponse = switch (arch) {
     },
     .aarch64 => extern struct {
         revision: u64,
-        flags: SmpMpFlags,
+        flags: MpFlags,
         bsp_mpidr: u64,
         cpu_count: u64,
-        cpus: LiminePtr(?[*]*SmpMpInfo),
+        cpus: LiminePtr(?[*]*MpInfo),
 
         /// Helper function to retrieve a slice of the CPUs array.
         /// This function will return null if the CPU count is 0 or if
         /// the CPUs pointer is null.
-        pub fn getCpus(self: @This()) []*SmpMpInfo {
+        pub fn getCpus(self: @This()) []*MpInfo {
             if (self.cpu_count == 0 or self.cpus == null) {
                 return &.{};
             }
@@ -549,15 +527,15 @@ const SmpMpResponse = switch (arch) {
     },
     .riscv64 => extern struct {
         revision: u64,
-        flags: SmpMpFlags,
+        flags: MpFlags,
         bsp_hartid: u64,
         cpu_count: u64,
-        cpus: LiminePtr(?[*]*SmpMpInfo),
+        cpus: LiminePtr(?[*]*MpInfo),
 
         /// Helper function to retrieve a slice of the CPUs array.
         /// This function will return null if the CPU count is 0 or if
         /// the CPUs pointer is null.
-        pub fn getCpus(self: @This()) []*SmpMpInfo {
+        pub fn getCpus(self: @This()) []*MpInfo {
             if (self.cpu_count == 0 or self.cpus == null) {
                 return &.{};
             }
@@ -566,12 +544,12 @@ const SmpMpResponse = switch (arch) {
     },
     .loongarch64 => extern struct {
         cpu_count: u64,
-        cpus: LiminePtr(?[*]*SmpMpInfo),
+        cpus: LiminePtr(?[*]*MpInfo),
 
         /// Helper function to retrieve a slice of the CPUs array.
         /// This function will return null if the CPU count is 0 or if
         /// the CPUs pointer is null.
-        pub fn getCpus(self: @This()) []*SmpMpInfo {
+        pub fn getCpus(self: @This()) []*MpInfo {
             if (self.cpu_count == 0 or self.cpus == null) {
                 return &.{};
             }
@@ -580,42 +558,20 @@ const SmpMpResponse = switch (arch) {
     },
 };
 
-const SmpMpRequest = extern struct {
+pub const MpRequest = extern struct {
     id: [4]u64 = id(0x95a67b819a1b857e, 0xa0b61b723b6a73e0),
     revision: u64 = 0,
-    response: LiminePtr(?*SmpMpResponse) = init_pointer,
+    response: LiminePtr(?*MpResponse) = init_pointer,
     // The `flags` field in the request is 64-bit on *all* platforms, even
     // though the flags enum is 32-bit on x86_64. This is to ensure that the
     // struct is not too small on x86_64 there is a `reserved: u32` field after it.
-    flags: SmpMpFlags = .{},
+    flags: MpFlags = .{},
     reserved: u32 = 0,
 };
 
-pub const MpFlags = SmpMpFlags;
-pub const MpInfo = SmpMpInfo;
-pub const MpResponse = SmpMpResponse;
-pub const MpRequest = SmpMpRequest;
-
-pub const SmpFlags = SmpMpFlags;
-pub const SmpInfo = SmpMpInfo;
-pub const SmpResponse = SmpMpResponse;
-pub const SmpRequest = SmpMpRequest;
-
 // Memory map
 
-const MemoryMapTypeV1 = enum(u64) {
-    usable = 0,
-    reserved = 1,
-    acpi_reclaimable = 2,
-    acpi_nvs = 3,
-    bad_memory = 4,
-    bootloader_reclaimable = 5,
-    kernel_and_modules = 6,
-    framebuffer = 7,
-    _,
-};
-
-const MemoryMapTypeV2 = enum(u64) {
+pub const MemoryMapType = enum(u64) {
     usable = 0,
     reserved = 1,
     acpi_reclaimable = 2,
@@ -626,11 +582,6 @@ const MemoryMapTypeV2 = enum(u64) {
     framebuffer = 7,
     _,
 };
-
-pub const MemoryMapType = if (config.api_revision >= 2)
-    MemoryMapTypeV2
-else
-    MemoryMapTypeV1;
 
 pub const MemoryMapEntry = extern struct {
     base: u64,
@@ -696,22 +647,11 @@ pub const InternalModuleFlag = packed struct(u64) {
     reserved: u62 = 0,
 };
 
-const InternalModuleV1 = extern struct {
-    path: LiminePtr([*:0]const u8),
-    cmdline: LiminePtr([*:0]const u8),
-    flags: InternalModuleFlag,
-};
-
-const InternalModuleV2 = extern struct {
+pub const InternalModule = extern struct {
     path: LiminePtr([*:0]const u8),
     string: LiminePtr([*:0]const u8),
     flags: InternalModuleFlag,
 };
-
-pub const InternalModule = if (config.api_revision >= 3)
-    InternalModuleV2
-else
-    InternalModuleV1;
 
 pub const ModuleResponse = extern struct {
     revision: u64,
@@ -741,23 +681,12 @@ pub const ModuleRequest = extern struct {
 
 // RSDP
 
-const RsdpResponseV1 = extern struct {
-    revision: u64,
-    address: LiminePtr(*anyopaque),
-};
-
-const RsdpResponseV2 = extern struct {
+/// The response to the RSDP request. The response will contain
+/// physical addresses to the RSDP.
+pub const RsdpResponse = extern struct {
     revision: u64,
     address: u64,
 };
-
-/// The response to the RSDP request. If the base revision is 1 or higher,
-/// the response will contain physical addresses to the RSDP, otherwise
-/// the response will contain virtual addresses to the RSDP.
-pub const RsdpResponse = if (config.api_revision >= 1)
-    RsdpResponseV2
-else
-    RsdpResponseV1;
 
 pub const RsdpRequest = extern struct {
     id: [4]u64 = id(0xc5e77b6b397e7b43, 0x27637845accdcf3c),
@@ -767,25 +696,13 @@ pub const RsdpRequest = extern struct {
 
 // SMBIOS
 
-const SmBiosResponseV1 = extern struct {
-    revision: u64,
-    entry_32: LiminePtr(?*anyopaque),
-    entry_64: LiminePtr(?*anyopaque),
-};
-
-const SmBiosResponseV2 = extern struct {
+/// The response to the SMBIOS request.
+/// The response will contain physical addresses to the SMBIOS entries.
+pub const SmBiosResponse = extern struct {
     revision: u64,
     entry_32: u64,
     entry_64: u64,
 };
-
-/// The response to the SMBIOS request. If the base revision is 3 or higher,
-/// the response will contain physical addresses to the SMBIOS entries, otherwise
-/// the response will contain virtual addresses to the SMBIOS entries.
-pub const SmBiosResponse = if (config.api_revision >= 1)
-    SmBiosResponseV2
-else
-    SmBiosResponseV1;
 
 pub const SmBiosRequest = extern struct {
     id: [4]u64 = id(0x9e9046f11e095391, 0xaa4a520fefbde5ee),
@@ -795,24 +712,12 @@ pub const SmBiosRequest = extern struct {
 
 // EFI system table
 
-///
-const EfiSystemTableResponseV1 = extern struct {
-    revision: u64,
-    address: LiminePtr(?*std.os.uefi.tables.SystemTable),
-};
-
-const EfiSystemTableResponseV2 = extern struct {
+/// The response to the EFI system table request. The response will contain
+/// a physical address to the system table.
+pub const EfiSystemTableResponse = extern struct {
     revision: u64,
     address: u64,
 };
-
-/// The response to the EFI system table request. If the base revision is 3
-/// or higher, the response will contain a physical address to the system table,
-/// otherwise the response will contain a virtual address to the system table.
-pub const EfiSystemTableResponse = if (config.api_revision >= 1)
-    EfiSystemTableResponseV2
-else
-    EfiSystemTableResponseV1;
 
 pub const EfiSystemTableRequest = extern struct {
     id: [4]u64 = id(0x5ceba5163eaaf6d6, 0x0a6981610cf65fcc),
@@ -890,9 +795,5 @@ pub const RiscvBootHartIdRequest = extern struct {
 };
 
 comptime {
-    if (config.api_revision > 3) {
-        @compileError("Limine API revision must be 3 or lower");
-    }
-
     std.testing.refAllDeclsRecursive(@This());
 }
